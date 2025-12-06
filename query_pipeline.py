@@ -6,8 +6,7 @@ import google.generativeai as genai
 import retriever  # Imports your local retriever.py
 
 # --- Configuration ---
-# We use the stable 1.5-flash-001 or the newer 2.5-flash if available
-# If 2.5 fails for you, switch this string to 'gemini-1.5-flash-001'
+# Use the model that you confirmed works
 MODEL_NAME = 'gemini-2.5-flash' 
 
 try:
@@ -30,97 +29,94 @@ else:
     generation_model = None
 
 def clean_json_string(text):
-    """
-    Cleans the model response to extract just the JSON.
-    Removes markdown code blocks (```json ... ```).
-    """
-    # Remove markdown code blocks
     text = re.sub(r"```json\s*", "", text)
     text = re.sub(r"```\s*", "", text)
-    
-    # Find the first opening brace and last closing brace
     start = text.find("{")
     end = text.rfind("}")
-    
     if start != -1 and end != -1:
         return text[start:end+1]
     return text
 
 def parse_json_response(response_text):
-    print(f"RAW PARSER OUTPUT: {response_text}") # Debug print for logs
-    
+    print(f"DEBUG - RAW LLM OUTPUT: {response_text}") # SEE THIS IN LOGS
     cleaned_text = clean_json_string(response_text)
-    
     try:
         return json.loads(cleaned_text)
     except json.JSONDecodeError:
-        # Fallback: If JSON fails, assume semantic search
-        print("JSON Decode Failed. Defaulting to Semantic Search.")
         return {"intent": "semantic", "query": response_text}
 
 def handle_user_query(user_question):
     if not generation_model:
-        return "System Error: Gemini API Key is missing. Check your Streamlit secrets."
+        return "System Error: Gemini API Key is missing."
 
-    # --- Step 1: Parse Intent ---
+    # --- Step 1: Parse Intent (IMPROVED PROMPT) ---
     parsing_prompt = textwrap.dedent(f"""
-    You are a query parsing agent for a university club database.
+    You are a PostgreSQL expert and database agent.
     
-    Task: Convert the user's question into a JSON object.
+    Table: events
+    Columns: 
+    - name_of_event (Text)
+    - date_of_event (Date, format YYYY-MM-DD)
+    - event_domain (Text, e.g., 'AI', 'Coding')
+    - description_insights (Text)
+    - venue (Text)
     
-    Rules:
-    1. If the user asks for specific data (dates, counts, names), use "structured" intent and write a PostgreSQL query.
-       - Table: events
-       - Columns: event_id, name_of_event, event_domain, date_of_event, faculty_coordinators, venue
-       - Example: "Who is running the AI event?" -> {{"intent": "structured", "query": "SELECT faculty_coordinators FROM events WHERE event_domain ILIKE '%AI%'"}}
+    TASK: Classify the query and generate the payload.
     
-    2. If the user asks about concepts, summaries, or "what is", use "semantic" intent and extract keywords.
-       - Example: "Tell me about the hackathon" -> {{"intent": "semantic", "query": "hackathon details"}}
+    RULES FOR INTENT:
+    1. "structured": Use this for ANY query involving Dates, Counts, Lists of names, or Filtering by domain.
+       - You MUST write a valid PostgreSQL query in the 'query' field.
+       - For MONTH/YEAR: Use `EXTRACT(MONTH FROM date_of_event) = X`.
+       - Example: "Events in September 2025" -> SELECT name_of_event, date_of_event FROM events WHERE EXTRACT(MONTH FROM date_of_event) = 9 AND EXTRACT(YEAR FROM date_of_event) = 2025;
     
+    2. "semantic": Use this ONLY for abstract questions like "What is the vibe?", "Tell me about AI", "Summary of perks".
+       - The 'query' field should be keywords.
+
     User Question: "{user_question}"
     
-    Output strictly valid JSON. No markdown. No explanations.
+    Output JSON ONLY: {{ "intent": "...", "query": "..." }}
     """)
 
     try:
         parse_resp = generation_model.generate_content(parsing_prompt)
         parsed = parse_json_response(parse_resp.text)
     except Exception as e:
-        return f"Model Error ({MODEL_NAME}): {e}"
+        return f"Model Error: {e}"
 
     # --- Step 2: Retrieve ---
-    intent = parsed.get("intent", "semantic") # Default to semantic if missing
+    intent = parsed.get("intent", "semantic")
     query = parsed.get("query", user_question)
     
-    print(f"INTENT: {intent} | QUERY: {query}") # Debug log
+    print(f"DEBUG - INTENT: {intent}") 
+    print(f"DEBUG - QUERY: {query}")
     
     context = ""
-    if intent == "semantic":
-        # Search vector DB
-        results = retriever.query_vector_db(query)
-        if not results or results == ["No relevant results found."]:
-            context = "No relevant documents found in the database."
-        else:
-            context = "\n\n".join(results)
+    if intent == "structured":
+        # Run SQL
+        try:
+            results = retriever.query_relational_db(query)
+            context = f"Database Results: {str(results)}"
+        except Exception as e:
+            context = f"SQL Error: {e}"
             
-    elif intent == "structured":
-        # Search SQL DB
-        results = retriever.query_relational_db(query)
-        context = f"Database returned: {str(results)}"
+    elif intent == "semantic":
+        # Run Vector Search
+        results = retriever.query_vector_db(query)
+        context = "\n\n".join(results) if results else "No relevant documents found."
     
     else:
         context = "Could not parse intent."
 
     # --- Step 3: Generate Answer ---
     final_prompt = f"""
-    You are a helpful Club Assistant. Answer the user's question based ONLY on the context below.
-    
     User Question: {user_question}
     
-    Context from Database:
+    Context (Database Data):
     {context}
     
-    If the context says "No relevant documents" or is empty, politely say you don't have that info.
+    Instructions:
+    - If the context contains a list of database tuples (e.g. [('Event A', '2025-09-12')]), format them into a nice readable list.
+    - If the context is empty or says "No results", tell the user politely.
     """
     
     try:
@@ -128,9 +124,3 @@ def handle_user_query(user_question):
         return final_resp.text
     except Exception as e:
         return f"Generator Error: {e}"
-
-if __name__ == "__main__":
-    # Test locally
-    while True:
-        q = input("Question: ")
-        print(handle_user_query(q))
