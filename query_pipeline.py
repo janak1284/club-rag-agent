@@ -116,7 +116,6 @@ def handle_user_query(user_question):
     
     Instructions:
     - If there are multiple events, formatted them as a Markdown Table.
-    - Columns: Event Name | Date | Domain | Venue
     - If there is only one event, use a detailed list format.
     - If the context is empty, say "No events found."
     """
