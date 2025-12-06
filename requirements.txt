@@ -6,3 +6,4 @@ google-generativeai
 pgvector
 numpy
 torch
+libpq-dev
