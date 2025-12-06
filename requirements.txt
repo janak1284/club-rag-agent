@@ -1,0 +1,7 @@
+streamlit
+psycopg2-binary
+sentence-transformers
+google-generativeai
+pgvector
+numpy
+torch --index-url https://download.pytorch.org/whl/cpu
