@@ -115,8 +115,10 @@ def handle_user_query(user_question):
     {context}
     
     Instructions:
-    - If the context contains a list of database tuples (e.g. [('Event A', '2025-09-12')]), format them into a nice readable list.
-    - If the context is empty or says "No results", tell the user politely.
+    - If there are multiple events, formatted them as a Markdown Table.
+    - Columns: Event Name | Date | Domain | Venue
+    - If there is only one event, use a detailed list format.
+    - If the context is empty, say "No events found."
     """
     
     try:
